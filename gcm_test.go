@@ -1,11 +1,11 @@
 // Copyright 2015 Google Inc. All Rights Reserved.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// 
+//
 //     http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,15 +15,15 @@
 package gcm
 
 import (
-  "testing"
+	"testing"
 )
 
 func assertEqual(t *testing.T, e, v interface{}) {
-  if e != v {
-    t.Fatalf("%#v != %#v", v, e)
-  }
+	if e != v {
+		t.Fatalf("%#v != %#v", v, e)
+	}
 }
 
 func TestXmppUser(t *testing.T) {
-  assertEqual(t, xmppUser("b", "b@gcm.googleapis.com"))
+	assertEqual(t, xmppUser("b", "b@gcm.googleapis.com"))
 }
