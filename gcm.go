@@ -1,11 +1,11 @@
 // Copyright 2015 Google Inc. All Rights Reserved.
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// 
+//
 //     http://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -59,6 +59,9 @@ type upstream struct {
 // Message is the custom data passed with every GCM message.
 type Message map[string]interface{}
 
+// StopChannel is a channel type to stop the server.
+type StopChannel chan bool
+
 // MessageHandler is the type for a function that handles a GCM message.
 type MessageHandler func(from string, m Message) error
 
@@ -90,11 +93,20 @@ func Send(apiKey, to string, m Message) error {
 }
 
 // Listen blocks and connects to GCM waiting for messages, calling the handler
-// for every "normal" type message.
-func Listen(senderId, apiKey string, h MessageHandler) error {
+// for every "normal" type message. An optional stop channel can be provided to
+// stop listening.
+func Listen(senderId, apiKey string, h MessageHandler, stop StopChannel) error {
 	cl, err := xmpp.NewClient(xmppAddress, xmppUser(senderId), apiKey, DebugMode)
 	if err != nil {
 		return fmt.Errorf("error connecting client>%v", err)
+	}
+	if stop != nil {
+		go func() {
+			select {
+			case <-stop:
+				cl.Close()
+			}
+		}()
 	}
 	for {
 		stanza, err := cl.Recv()
