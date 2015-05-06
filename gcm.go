@@ -18,6 +18,7 @@ package gcm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -44,30 +45,51 @@ func debug(m string, v interface{}) {
 	}
 }
 
-// downstream is a downstream (server -> client) message.
-type downstream struct {
-	To   string  `json:"to,omitempty"`
-	Data Message `json:"data,omitempty"`
+// Message is a downstream (server -> client) message.
+type Message struct {
+	To                    string       `json:"to,omitempty"`
+	RegistrationIds       []string     `json:"registration_ids,omitempty"`
+	NotificationKey       string       `json:"notification_key,omitempty"`
+	CollapseKey           string       `json:"collapse_key,omitempty"`
+	DelayWhileIdle        bool         `json:"delay_while_idle,omitempty"`
+	TimeToLive            uint         `json:"time_to_live,omitempty"`
+	RestrictedPackageName string       `json:"restricted_package_name,omitempty"`
+	DryRun                bool         `json:"dry_run,omitempty"`
+	Data                  Data         `json:"data,omitempty"`
+	Notification          Notification `json:"notification,omitempty"`
 }
 
 // upstream is an upstream (client -> server) message.
 type upstream struct {
-	From string  `json:"from"`
-	Data Message `json:"data,omitempty"`
+	From      string `json:"from"`
+	Category  string `json:"category"`
+	MessageId string `json:"message_id"`
+	Data      Data   `json:"data,omitempty"`
 }
 
-// Message is the custom data passed with every GCM message.
-type Message map[string]interface{}
+// Data is the custom data passed with every GCM message.
+type Data map[string]interface{}
+
+// A GCM notification
+type Notification struct {
+	Text        string `json:"text,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Badge       string `json:"badge,omitempty"`
+	ClickAction string `json:"click-action,omitempty"`
+}
 
 // StopChannel is a channel type to stop the server.
 type StopChannel chan bool
 
 // MessageHandler is the type for a function that handles a GCM message.
-type MessageHandler func(from string, m Message) error
+type MessageHandler func(from string, d Data) error
 
 // Send sends a downstream message to a given device.
-func Send(apiKey, to string, m Message) error {
-	bs, err := json.Marshal(&downstream{To: to, Data: m})
+func Send(apiKey string, m Message) error {
+	if m.To == "" && m.NotificationKey == "" && len(m.RegistrationIds) == 0 {
+		return errors.New("One of To, RegistrationIds or NotificationKey must be defined for the message.")
+	}
+	bs, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("error marshalling message>%v", err)
 	}
