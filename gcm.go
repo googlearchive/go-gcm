@@ -115,8 +115,8 @@ type XmppResponse struct {
 	ErrorDescription string `json:"error_description,omitempty"`
 }
 
-// upstream is an upstream (client -> server) message.
-type upstream struct {
+// Upstream is an upstream (client -> server) message.
+type Upstream struct {
 	From      string `json:"from"`
 	Category  string `json:"category"`
 	MessageId string `json:"message_id"`
@@ -146,6 +146,9 @@ type Notification struct {
 
 // StopChannel is a channel type to stop the server.
 type StopChannel chan bool
+
+// UpstreamChannel is a channel type to deliver received upstream messages.
+type UpstreamChannel chan Upstream
 
 // MessageHandler is the type for a function that handles a GCM message.
 type MessageHandler func(from string, d Data) error
@@ -343,10 +346,9 @@ func checkResults(gcmResults []Result, recipients []string, resultsState multica
 	return doRetry, toRetry, nil
 }
 
-// Listen blocks and connects to GCM waiting for messages, calling the handler
-// for every "normal" type message. An optional stop channel can be provided to
-// stop listening.
-func Listen(senderId, apiKey string, h MessageHandler, stop StopChannel) error {
+// Listen blocks and connects to GCM waiting for messages; normal messages received are sent
+// to the Upstream Channel. An optional stop channel can be provided to stop listening.
+func Listen(senderId, apiKey string, uc UpstreamChannel, stop StopChannel) error {
 	cl, err := xmpp.NewClient(xmppAddress, xmppUser(senderId), apiKey, DebugMode)
 	// TODO(silvano): check for CONNECTION_DRAINING
 	if err != nil {
@@ -372,9 +374,9 @@ func Listen(senderId, apiKey string, h MessageHandler, stop StopChannel) error {
 		}
 		switch v.Type {
 		case "normal":
-			up := &upstream{}
+			up := &Upstream{}
 			json.Unmarshal([]byte(v.Other[0]), up)
-			go h(up.From, up.Data)
+			uc <- *up
 		case "control":
 			debug("debugging control message: %v", v)
 		case "error":
