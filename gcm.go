@@ -59,7 +59,7 @@ func debug(m string, v interface{}) {
 
 // A GCM Http message.
 type HttpMessage struct {
-	To                    string       `json:"to"`
+	To                    string       `json:"to,omitempty"`
 	RegistrationIds       []string     `json:"registration_ids,omitempty"`
 	CollapseKey           string       `json:"collapse_key,omitempty"`
 	Priority              uint         `json:"priority,omitempty"`
