@@ -12,6 +12,10 @@ Documentation: http://godoc.org/github.com/google/go-gcm
 
     $ go get github.com/google/go-gcm
 
+## Status
+
+This library is in Alpha. We will make an effort to support the library, but we reserve the right to make incompatible changes when necessary.
+
 ## Feedback
 
 Please read CONTRIBUTING and raise issues here in Github.
