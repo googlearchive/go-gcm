@@ -22,6 +22,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jpillora/backoff"
@@ -57,7 +58,10 @@ var (
 		// DeviceMessageRateExceeded and TopicsMessageRateExceeded.
 	}
 	// Cache of xmpp clients.
-	xmppClients = make(map[string]*xmppGcmClient)
+	xmppClients = struct {
+		sync.RWMutex
+		m map[string]*xmppGcmClient
+	}{m: make(map[string]*xmppGcmClient)}
 )
 
 // Prints debug info if DebugMode is set.
@@ -229,14 +233,17 @@ type messageLogEntry struct {
 // TODO(silvano): this could be revised, taking into account that we cannot have more than 1000
 // connections per senderId.
 func newXmppGcmClient(senderId string, apiKey string) (*xmppGcmClient, error) {
-	if xmppClients[senderId] == nil {
+	xmppClients.Lock()
+	if xmppClients.m[senderId] == nil {
 		c, err := xmpp.NewClient(xmppAddress, xmppUser(senderId), apiKey, DebugMode)
 		if err != nil {
 			return nil, fmt.Errorf("error connecting client>%v", err)
 		}
-		xmppClients[senderId] = &xmppGcmClient{*c, make(map[string]*messageLogEntry)}
+
+		xmppClients.m[senderId] = &xmppGcmClient{*c, make(map[string]*messageLogEntry)}
 	}
-	return xmppClients[senderId], nil
+	xmppClients.Unlock()
+	return xmppClients.m[senderId], nil
 }
 
 // xmppGcmClient implementation of listening for messages from CCS; the messages can be
