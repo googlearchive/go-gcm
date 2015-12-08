@@ -76,7 +76,7 @@ type HttpMessage struct {
 	To                    string       `json:"to,omitempty"`
 	RegistrationIds       []string     `json:"registration_ids,omitempty"`
 	CollapseKey           string       `json:"collapse_key,omitempty"`
-	Priority              uint         `json:"priority,omitempty"`
+	Priority              string       `json:"priority,omitempty"`
 	ContentAvailable      bool         `json:"content_available,omitempty"`
 	DelayWhileIdle        bool         `json:"delay_while_idle,omitempty"`
 	TimeToLive            uint         `json:"time_to_live,omitempty"`
@@ -92,7 +92,7 @@ type XmppMessage struct {
 	MessageId                string       `json:"message_id"`
 	MessageType              string       `json:"message_type,omitempty"`
 	CollapseKey              string       `json:"collapse_key,omitempty"`
-	Priority                 uint         `json:"priority,omitempty"`
+	Priority                 string       `json:"priority,omitempty"`
 	ContentAvailable         bool         `json:"content_available,omitempty"`
 	DelayWhileIdle           bool         `json:"delay_while_idle,omitempty"`
 	TimeToLive               uint         `json:"time_to_live,omitempty"`
@@ -104,7 +104,7 @@ type XmppMessage struct {
 
 // HttpResponse is the GCM connection server response to an HTTP downstream message request.
 type HttpResponse struct {
-	MulticastId  uint     `json:"multicast_id,omitempty"`
+	MulticastId  int      `json:"multicast_id,omitempty"`
 	Success      uint     `json:"success,omitempty"`
 	Failure      uint     `json:"failure,omitempty"`
 	CanonicalIds uint     `json:"canonical_ids,omitempty"`
@@ -172,7 +172,7 @@ type httpGcmClient struct {
 	retryAfter string
 }
 
-// hhtpGcmClient implementation to send a message through GCM Http server.
+// httpGcmClient implementation to send a message through GCM Http server.
 func (c *httpGcmClient) send(apiKey string, m HttpMessage) (*HttpResponse, error) {
 	bs, err := json.Marshal(m)
 	if err != nil {
@@ -237,9 +237,9 @@ func newXmppGcmClient(senderId string, apiKey string) (*xmppGcmClient, error) {
 	if xmppClients.m[senderId] == nil {
 		c, err := xmpp.NewClient(xmppAddress, xmppUser(senderId), apiKey, DebugMode)
 		if err != nil {
+			xmppClients.Unlock()
 			return nil, fmt.Errorf("error connecting client>%v", err)
 		}
-
 		xmppClients.m[senderId] = &xmppGcmClient{*c, make(map[string]*messageLogEntry)}
 	}
 	xmppClients.Unlock()
@@ -400,7 +400,7 @@ func SendHttp(apiKey string, m HttpMessage) (*HttpResponse, error) {
 func sendHttp(apiKey string, m HttpMessage, c httpClient, b backoffProvider) (*HttpResponse, error) {
 	// TODO(silvano): check this with responses for topic/notification group
 	gcmResp := &HttpResponse{}
-	var multicastId uint
+	var multicastId int
 	targets, err := messageTargetAsStringsArray(m)
 	if err != nil {
 		return gcmResp, fmt.Errorf("error extracting target from message: %v", err)
@@ -448,7 +448,7 @@ func sendHttp(apiKey string, m HttpMessage, c httpClient, b backoffProvider) (*H
 
 // Builds the final response for a multicast message, in case there have been retries for
 // subsets of the original recipients.
-func buildRespForMulticast(to []string, mrs multicastResultsState, mid uint) *HttpResponse {
+func buildRespForMulticast(to []string, mrs multicastResultsState, mid int) *HttpResponse {
 	resp := &HttpResponse{}
 	resp.MulticastId = mid
 	resp.Results = make([]Result, len(to))
@@ -518,7 +518,7 @@ func SendXmpp(senderId, apiKey string, m XmppMessage) (string, int, error) {
 func Listen(senderId, apiKey string, h MessageHandler, stop <-chan bool) error {
 	cl, err := newXmppGcmClient(senderId, apiKey)
 	if err != nil {
-		fmt.Errorf("error creating xmpp client>%v", err)
+		return fmt.Errorf("error creating xmpp client>%v", err)
 	}
 	return cl.listen(h, stop)
 }
