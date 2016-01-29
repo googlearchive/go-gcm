@@ -410,7 +410,7 @@ func sendHttp(apiKey string, m HttpMessage, c httpClient, b backoffProvider) (*H
 	copy(localTo, targets)
 	resultsState := &multicastResultsState{}
 	for b.sendAnother() {
-		gcmResp, err := c.send(apiKey, m)
+		gcmResp, err = c.send(apiKey, m)
 		if err != nil {
 			return gcmResp, fmt.Errorf("error sending request to GCM HTTP server: %v", err)
 		}
