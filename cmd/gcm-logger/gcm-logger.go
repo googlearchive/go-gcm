@@ -13,11 +13,11 @@ var (
 )
 
 // onMessage receives messages, logs them, and echoes a response.
-func onMessage(from string, d gcm.Data) error {
-	toylog.Infoln("Message, from:", from, "with:", d)
+func onMessage(cm gcm.CcsMessage) error {
+	toylog.Infoln("Message, from:", cm.From, "with:", cm.Data)
 	// Echo the message with a tag.
-	d["echoed"] = true
-	m := gcm.HttpMessage{To: from, Data: d}
+	cm.Data["echoed"] = true
+	m := gcm.HttpMessage{To: cm.From, Data: cm.Data}
 	r, err := gcm.SendHttp(*serverKey, m)
 	if err != nil {
 		toylog.Errorln("Error sending message.", err)
