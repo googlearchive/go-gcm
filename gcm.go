@@ -220,6 +220,8 @@ type xmppClient interface {
 type xmppGcmClient struct {
 	XmppClient xmpp.Client
 	messages   map[string]*messageLogEntry
+	senderID   string
+	isClosed   bool
 }
 
 // An entry in the messages log, used to keep track of messages pending ack and
@@ -240,7 +242,7 @@ func newXmppGcmClient(senderId string, apiKey string) (*xmppGcmClient, error) {
 			xmppClients.Unlock()
 			return nil, fmt.Errorf("error connecting client>%v", err)
 		}
-		xmppClients.m[senderId] = &xmppGcmClient{*c, make(map[string]*messageLogEntry)}
+		xmppClients.m[senderId] = &xmppGcmClient{*c, make(map[string]*messageLogEntry), senderId, false}
 	}
 	xmppClients.Unlock()
 	return xmppClients.m[senderId], nil
@@ -254,12 +256,22 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			select {
 			case <-stop:
 				c.XmppClient.Close()
+				// Remove client from map
+				// Set isClosed to 0 so we don't trigger an error when returning
+				xmppClients.Lock()
+				c.isClosed = true
+				delete(xmppClients.m, c.senderID)
+				xmppClients.Unlock()
 			}
 		}()
 	}
 	for {
 		stanza, err := c.XmppClient.Recv()
 		if err != nil {
+			// If client is closed we can't return without error
+			if c.isClosed {
+				return nil
+			}
 			// This is likely fatal, so return.
 			return fmt.Errorf("error on Recv>%v", err)
 		}
