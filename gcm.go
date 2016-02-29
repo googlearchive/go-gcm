@@ -292,6 +292,7 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			case ccsAck:
 				_, ok = c.messages[cm.MessageId]
 				if ok {
+					go h(*cm)
 					delete(c.messages, cm.MessageId)
 				}
 			// nack for a sent message, retry if retryable error, bubble up otherwise
@@ -299,7 +300,11 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 				if retryableErrors[cm.Error] {
 					c.retryMessage(*cm, h)
 				} else {
-					go h(*cm)
+					_, ok = c.messages[cm.MessageId]
+					if ok {
+						go h(*cm)
+						delete(c.messages, cm.MessageId)
+					}
 				}
 			case ccsControl:
 				// TODO(silvano): create a new connection, drop the old one 'after a while'
