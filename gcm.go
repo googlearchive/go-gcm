@@ -22,6 +22,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,14 +32,14 @@ import (
 )
 
 const (
+	CCSAck      = "ack"
+	CCSNack     = "nack"
+	CCSControl  = "control"
+	CCSReceipt  = "receipt"
 	httpAddress = "https://android.googleapis.com/gcm/send"
 	xmppHost    = "gcm.googleapis.com"
 	xmppPort    = "5235"
 	xmppAddress = xmppHost + ":" + xmppPort
-	ccsAck      = "ack"
-	ccsNack     = "nack"
-	ccsControl  = "control"
-	ccsReceipt  = "receipt"
 	// For ccs the min for exponential backoff has to be 1 sec
 	ccsMinBackoff = 1 * time.Second
 )
@@ -280,7 +281,7 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			continue
 		}
 		switch v.Type {
-		case "normal":
+		case "":
 			cm := &CcsMessage{}
 			err = json.Unmarshal([]byte(v.Other[0]), cm)
 			if err != nil {
@@ -289,14 +290,14 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			}
 			switch cm.MessageType {
 			// ack for a sent messages, delete it from log
-			case ccsAck:
+			case CCSAck:
 				_, ok = c.messages[cm.MessageId]
 				if ok {
 					go h(*cm)
 					delete(c.messages, cm.MessageId)
 				}
 			// nack for a sent message, retry if retryable error, bubble up otherwise
-			case ccsNack:
+			case CCSNack:
 				if retryableErrors[cm.Error] {
 					c.retryMessage(*cm, h)
 				} else {
@@ -306,15 +307,29 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 						delete(c.messages, cm.MessageId)
 					}
 				}
-			case ccsControl:
+			default:
+				debug("Unknown ccs message: %v", cm)
+			}
+		case "normal":
+			cm := &CcsMessage{}
+			err = json.Unmarshal([]byte(v.Other[0]), cm)
+			if err != nil {
+				debug("Error unmarshaling ccs message: %v", err)
+				continue
+			}
+			switch cm.MessageType {
+			case CCSControl:
 				// TODO(silvano): create a new connection, drop the old one 'after a while'
 				debug("control message! %v", cm)
-			case ccsReceipt:
+			case CCSReceipt:
 				debug("receipt! %v", cm)
-				go h(*cm)
+				// receipt message: send ack and pass to listener
+				origMessageID := strings.TrimPrefix(cm.MessageId, "dr2:")
+				ack := XmppMessage{To: cm.From, MessageId: origMessageID, MessageType: CCSAck}
+				c.send(ack)
 			default:
 				// upstream message: send ack and pass to listener
-				ack := XmppMessage{To: cm.From, MessageId: cm.MessageId, MessageType: ccsAck}
+				ack := XmppMessage{To: cm.From, MessageId: cm.MessageId, MessageType: CCSAck}
 				c.send(ack)
 				go h(*cm)
 			}
