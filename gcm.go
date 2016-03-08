@@ -107,33 +107,33 @@ func (sm *safeMap) HasEntry(key string) bool {
 
 // A GCM Http message.
 type HttpMessage struct {
-	To                    string       `json:"to,omitempty"`
-	RegistrationIds       []string     `json:"registration_ids,omitempty"`
-	CollapseKey           string       `json:"collapse_key,omitempty"`
-	Priority              string       `json:"priority,omitempty"`
-	ContentAvailable      bool         `json:"content_available,omitempty"`
-	DelayWhileIdle        bool         `json:"delay_while_idle,omitempty"`
-	TimeToLive            uint         `json:"time_to_live,omitempty"`
-	RestrictedPackageName string       `json:"restricted_package_name,omitempty"`
-	DryRun                bool         `json:"dry_run,omitempty"`
-	Data                  Data         `json:"data,omitempty"`
-	Notification          Notification `json:"notification,omitempty"`
+	To                    string        `json:"to,omitempty"`
+	RegistrationIds       []string      `json:"registration_ids,omitempty"`
+	CollapseKey           string        `json:"collapse_key,omitempty"`
+	Priority              string        `json:"priority,omitempty"`
+	ContentAvailable      bool          `json:"content_available,omitempty"`
+	DelayWhileIdle        bool          `json:"delay_while_idle,omitempty"`
+	TimeToLive            uint          `json:"time_to_live,omitempty"`
+	RestrictedPackageName string        `json:"restricted_package_name,omitempty"`
+	DryRun                bool          `json:"dry_run,omitempty"`
+	Data                  Data          `json:"data,omitempty"`
+	Notification          *Notification `json:"notification,omitempty"`
 }
 
 // A GCM Xmpp message.
 type XmppMessage struct {
-	To                       string       `json:"to,omitempty"`
-	MessageId                string       `json:"message_id"`
-	MessageType              string       `json:"message_type,omitempty"`
-	CollapseKey              string       `json:"collapse_key,omitempty"`
-	Priority                 string       `json:"priority,omitempty"`
-	ContentAvailable         bool         `json:"content_available,omitempty"`
-	DelayWhileIdle           bool         `json:"delay_while_idle,omitempty"`
-	TimeToLive               uint         `json:"time_to_live,omitempty"`
-	DeliveryReceiptRequested bool         `json:"delivery_receipt_requested,omitempty"`
-	DryRun                   bool         `json:"dry_run,omitempty"`
-	Data                     Data         `json:"data,omitempty"`
-	Notification             Notification `json:"notification,omitempty"`
+	To                       string        `json:"to,omitempty"`
+	MessageId                string        `json:"message_id"`
+	MessageType              string        `json:"message_type,omitempty"`
+	CollapseKey              string        `json:"collapse_key,omitempty"`
+	Priority                 string        `json:"priority,omitempty"`
+	ContentAvailable         bool          `json:"content_available,omitempty"`
+	DelayWhileIdle           bool          `json:"delay_while_idle,omitempty"`
+	TimeToLive               uint          `json:"time_to_live,omitempty"`
+	DeliveryReceiptRequested bool          `json:"delivery_receipt_requested,omitempty"`
+	DryRun                   bool          `json:"dry_run,omitempty"`
+	Data                     Data          `json:"data,omitempty"`
+	Notification             *Notification `json:"notification,omitempty"`
 }
 
 // HttpResponse is the GCM connection server response to an HTTP downstream message request.
