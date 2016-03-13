@@ -59,7 +59,12 @@ var (
 		// DeviceMessageRateExceeded and TopicsMessageRateExceeded.
 	}
 	// Cache of xmpp clients.
-	xmppClients = safeMap{m: make(map[string]interface{})}
+	xmppClients = struct {
+		sync.Mutex
+		m map[string]*xmppGcmClient
+	}{
+		m: make(map[string]*xmppGcmClient),
+	}
 )
 
 // Prints debug info if DebugMode is set.
@@ -67,42 +72,6 @@ func debug(m string, v interface{}) {
 	if DebugMode {
 		log.Printf(m+":%+v", v)
 	}
-}
-
-// safeMap implements an untyped thread-safe map.
-type safeMap struct {
-	sync.RWMutex
-	m map[string]interface{}
-}
-
-// GetEntry safely gets an entry from the underlying map.
-func (sm *safeMap) GetEntry(key string) (interface{}, bool) {
-	sm.RLock()
-	defer sm.RUnlock()
-	e, ok := sm.m[key]
-	return e, ok
-}
-
-// SetEntry safely sets an entry in the underlying map.
-func (sm *safeMap) SetEntry(key string, e interface{}) {
-	sm.Lock()
-	defer sm.Unlock()
-	sm.m[key] = e
-}
-
-// DeleteEntry safely removes a keyed entry from the underlying map.
-func (sm *safeMap) DeleteEntry(key string) {
-	sm.Lock()
-	defer sm.Unlock()
-	delete(sm.m, key)
-}
-
-// HasEntry safely checks if the keyed entry exists in the underlying map.
-func (sm *safeMap) HasEntry(key string) bool {
-	sm.RLock()
-	defer sm.RUnlock()
-	_, ok := sm.m[key]
-	return ok
 }
 
 // A GCM Http message.
@@ -254,9 +223,12 @@ type xmppClient interface {
 type xmppGcmClient struct {
 	sync.RWMutex
 	XmppClient xmpp.Client
-	messages   safeMap
-	senderID   string
-	isClosed   bool
+	messages   struct {
+		sync.RWMutex
+		m map[string]*messageLogEntry
+	}
+	senderID string
+	isClosed bool
 }
 
 // An entry in the messages log, used to keep track of messages pending ack and
@@ -270,11 +242,10 @@ type messageLogEntry struct {
 // TODO(silvano): this could be revised, taking into account that we cannot have more than 1000
 // connections per senderId.
 func newXmppGcmClient(senderID string, apiKey string) (*xmppGcmClient, error) {
-	if e, ok := xmppClients.GetEntry(senderID); ok {
-		if c, ok := e.(*xmppGcmClient); ok {
-			return c, nil
-		}
-		return nil, fmt.Errorf("xmppClients entry not *xmppGcmClient")
+	xmppClients.Lock()
+	defer xmppClients.Unlock()
+	if xc, ok := xmppClients.m[senderID]; ok {
+		return xc, nil
 	}
 
 	nc, err := xmpp.NewClient(xmppAddress, xmppUser(senderID), apiKey, DebugMode)
@@ -284,10 +255,16 @@ func newXmppGcmClient(senderID string, apiKey string) (*xmppGcmClient, error) {
 
 	xc := &xmppGcmClient{
 		XmppClient: *nc,
-		messages:   safeMap{m: make(map[string]interface{})},
-		senderID:   senderID,
+		messages: struct {
+			sync.RWMutex
+			m map[string]*messageLogEntry
+		}{
+			m: make(map[string]*messageLogEntry),
+		},
+		senderID: senderID,
 	}
-	xmppClients.SetEntry(senderID, xc)
+
+	xmppClients.m[senderID] = xc
 	return xc, nil
 }
 
@@ -298,15 +275,16 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 		go func() {
 			select {
 			case <-stop:
-				c.XmppClient.Close()
-
 				// Set isClosed to 0 so we don't trigger an error when returning.
 				c.Lock()
+				c.XmppClient.Close()
 				c.isClosed = true
 				c.Unlock()
 
-				// Remove client cache.
-				xmppClients.DeleteEntry(c.senderID)
+				// Remove client from cache.
+				xmppClients.Lock()
+				delete(xmppClients.m, c.senderID)
+				xmppClients.Unlock()
 			}
 		}()
 	}
@@ -336,20 +314,24 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			}
 			switch cm.MessageType {
 			case CCSAck:
-				// ack for a sent messages, delete it from log.
-				if c.messages.HasEntry(cm.MessageId) {
+				c.messages.Lock()
+				// ack for a sent message, delete it from log.
+				if _, ok := c.messages.m[cm.MessageId]; ok {
 					go h(*cm)
-					c.messages.DeleteEntry(cm.MessageId)
+					delete(c.messages.m, cm.MessageId)
 				}
+				c.messages.Unlock()
 			case CCSNack:
 				// nack for a sent message, retry if retryable error, bubble up otherwise.
 				if retryableErrors[cm.Error] {
 					c.retryMessage(*cm, h)
 				} else {
-					if c.messages.HasEntry(cm.MessageId) {
+					c.messages.Lock()
+					if _, ok := c.messages.m[cm.MessageId]; ok {
 						go h(*cm)
-						c.messages.DeleteEntry(cm.MessageId)
+						delete(c.messages.m, cm.MessageId)
 					}
+					c.messages.Unlock()
 				}
 			default:
 				debug("Unknown ccs message: %v", cm)
@@ -373,6 +355,7 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 				c.send(ack)
 				go h(*cm)
 			default:
+				debug("uknown upstream message! %v", cm)
 				// Upstream message: send ack and pass to listener.
 				ack := XmppMessage{To: cm.From, MessageId: cm.MessageId, MessageType: CCSAck}
 				c.send(ack)
@@ -380,6 +363,8 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			}
 		case "error":
 			debug("error response %v", v)
+		default:
+			debug("unknown message type %v", v)
 		}
 	}
 }
@@ -390,13 +375,16 @@ func (c *xmppGcmClient) send(m XmppMessage) (string, int, error) {
 	if m.MessageId == "" {
 		m.MessageId = uuid.New()
 	}
-	if !c.messages.HasEntry(m.MessageId) {
+	c.messages.Lock()
+	if _, ok := c.messages.m[m.MessageId]; !ok {
 		b := newExponentialBackoff()
 		if b.b.Min < ccsMinBackoff {
 			b.setMin(ccsMinBackoff)
 		}
-		c.messages.SetEntry(m.MessageId, &messageLogEntry{body: &m, backoff: b})
+		c.messages.m[m.MessageId] = &messageLogEntry{body: &m, backoff: b}
 	}
+	c.messages.Unlock()
+
 	stanza := `<message id=""><gcm xmlns="google:mobile:data">%v</gcm></message>`
 	body, err := json.Marshal(m)
 	if err != nil {
@@ -414,16 +402,17 @@ func (c *xmppGcmClient) send(m XmppMessage) (string, int, error) {
 
 // Retry sending a message with exponential backoff; if over limit, bubble up the failed message.
 func (c *xmppGcmClient) retryMessage(cm CcsMessage, h MessageHandler) {
-	if e, ok := c.messages.GetEntry(cm.MessageId); ok {
-		if me, ok := e.(*messageLogEntry); ok {
-			if me.backoff.sendAnother() {
-				me.backoff.wait()
-				m := me.body
-				c.send(*m)
-			} else {
-				debug("Exponential backoff failed over limit for message: ", me)
-				go h(cm)
-			}
+	c.messages.RLock()
+	defer c.messages.RUnlock()
+	if me, ok := c.messages.m[cm.MessageId]; ok {
+		if me.backoff.sendAnother() {
+			go func(m *messageLogEntry) {
+				m.backoff.wait()
+				c.send(*m.body)
+			}(me)
+		} else {
+			debug("Exponential backoff failed over limit for message: ", me)
+			go h(cm)
 		}
 	}
 }
