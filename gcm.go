@@ -149,7 +149,8 @@ type Notification struct {
 	Icon         string `json:"icon,omitempty"`
 	Sound        string `json:"sound,omitempty"`
 	Badge        string `json:"badge,omitempty"`
-	Tag          string `json:"color,omitempty"`
+	Tag          string `json:"tag,omitempty"`
+	Color        string `json:"color,omitempty"`
 	ClickAction  string `json:"click_action,omitempty"`
 	BodyLocKey   string `json:"body_loc_key,omitempty"`
 	BodyLocArgs  string `json:"body_loc_args,omitempty"`
