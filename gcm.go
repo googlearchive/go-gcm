@@ -149,7 +149,8 @@ type Notification struct {
 	Icon         string `json:"icon,omitempty"`
 	Sound        string `json:"sound,omitempty"`
 	Badge        string `json:"badge,omitempty"`
-	Tag          string `json:"color,omitempty"`
+	Tag          string `json:"tag,omitempty"`
+	Color        string `json:"color,omitempty"`
 	ClickAction  string `json:"click_action,omitempty"`
 	BodyLocKey   string `json:"body_loc_key,omitempty"`
 	BodyLocArgs  string `json:"body_loc_args,omitempty"`
@@ -268,6 +269,49 @@ func newXmppGcmClient(senderID string, apiKey string) (*xmppGcmClient, error) {
 	return xc, nil
 }
 
+func (c *xmppGcmClient) waitProcessed() <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		for {
+			c.messages.RLock()
+			nm := len(c.messages.m)
+			c.messages.RUnlock()
+			if nm == 0 {
+				close(ch)
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}()
+	return ch
+}
+
+func (c *xmppGcmClient) gracefulClose() {
+	c.Lock()
+	defer c.Unlock()
+	if c.isClosed {
+		return
+	}
+
+	// Remove myself from clients cache.
+	xmppClients.Lock()
+	delete(xmppClients.m, c.senderID)
+	xmppClients.Unlock()
+
+	// Wait until all is done, or timed out.
+	select {
+	case <-c.waitProcessed():
+		break
+	case <-time.After(3 * time.Second):
+		//log.Error("xmpp taking a while to close, so giving up")
+		break
+	}
+
+	c.XmppClient.Close()
+	// Set isClosed so we don't trigger an error when returning from listen.
+	c.isClosed = true
+}
+
 // xmppGcmClient implementation of listening for messages from CCS; the messages can be
 // acks or nacks for messages sent through XMPP, control messages, upstream messages.
 func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
@@ -275,16 +319,7 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 		go func() {
 			select {
 			case <-stop:
-				// Set isClosed to 0 so we don't trigger an error when returning.
-				c.Lock()
-				c.XmppClient.Close()
-				c.isClosed = true
-				c.Unlock()
-
-				// Remove client from cache.
-				xmppClients.Lock()
-				delete(xmppClients.m, c.senderID)
-				xmppClients.Unlock()
+				c.gracefulClose()
 			}
 		}()
 	}
@@ -293,9 +328,9 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 		if err != nil {
 			c.RLock()
 			defer c.RUnlock()
-			// If client is closed we can't return without error.
 			if c.isClosed {
-				return nil
+				// Client is closed, return without error.
+				break
 			}
 			// This is likely fatal, so return.
 			return fmt.Errorf("error on Recv>%v", err)
@@ -347,6 +382,9 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			case CCSControl:
 				// TODO(silvano): create a new connection, drop the old one 'after a while'
 				debug("control message! %v", cm)
+				if cm.Error == "CONNECTION_DRAINING" {
+					c.gracefulClose()
+				}
 			case CCSReceipt:
 				debug("receipt! %v", cm)
 				// Receipt message: send ack and pass to listener.
@@ -367,6 +405,7 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			debug("unknown message type %v", v)
 		}
 	}
+	return nil
 }
 
 //TODO(silvano): add flow control (max 100 pending messages at one time)
@@ -393,14 +432,21 @@ func (c *xmppGcmClient) send(m XmppMessage) (string, int, error) {
 	bs := string(body)
 
 	debug("Sending XMPP: ", fmt.Sprintf(stanza, bs))
+
 	// Serialize wire access for thread safety.
 	c.Lock()
-	defer c.Unlock()
 	bytes, err := c.XmppClient.SendOrg(fmt.Sprintf(stanza, bs))
+	c.Unlock()
+	if err != nil {
+		c.messages.Lock()
+		delete(c.messages.m, m.MessageId)
+		c.messages.Unlock()
+		c.gracefulClose()
+	}
 	return m.MessageId, bytes, err
 }
 
-// Retry sending a message with exponential backoff; if over limit, bubble up the failed message.
+// Retry sending an xmpp message with exponential backoff; if over limit, bubble up the failed message.
 func (c *xmppGcmClient) retryMessage(cm CcsMessage, h MessageHandler) {
 	c.messages.RLock()
 	defer c.messages.RUnlock()
@@ -592,6 +638,16 @@ func Listen(senderId, apiKey string, h MessageHandler, stop <-chan bool) error {
 		return fmt.Errorf("error creating xmpp client>%v", err)
 	}
 	return cl.listen(h, stop)
+}
+
+// Close will stop and close the corresponding client.
+func Close(senderId string) error {
+	c, err := newXmppGcmClient(senderId, "")
+	if err != nil {
+		return fmt.Errorf("error creating xmpp client>%v", err)
+	}
+	c.gracefulClose()
+	return nil
 }
 
 // authHeader generates an authorization header value for an api key.
