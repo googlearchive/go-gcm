@@ -51,10 +51,10 @@ var (
 	DefaultMinBackoff = 1 * time.Second
 	DefaultMaxBackoff = 10 * time.Second
 	retryableErrors   = map[string]bool{
-		"Unavailable":            true,
-		"SERVICE_UNAVAILABLE":    true,
-		"InternalServerError":    true,
-		"INTERNAL_SERVER_ ERROR": true,
+		"Unavailable":           true,
+		"SERVICE_UNAVAILABLE":   true,
+		"InternalServerError":   true,
+		"INTERNAL_SERVER_ERROR": true,
 		// TODO(silvano): should we backoff with the same strategy on
 		// DeviceMessageRateExceeded and TopicsMessageRateExceeded.
 	}
@@ -228,6 +228,7 @@ type xmppGcmClient struct {
 		sync.RWMutex
 		m map[string]*messageLogEntry
 	}
+	pongs    chan struct{}
 	senderID string
 	isClosed bool
 }
@@ -263,13 +264,61 @@ func newXmppGcmClient(senderID string, apiKey string) (*xmppGcmClient, error) {
 			m: make(map[string]*messageLogEntry),
 		},
 		senderID: senderID,
+		pongs:    make(chan struct{}),
 	}
+
+	go xc.pingPeriodically(5*time.Second, 10*time.Second)
 
 	xmppClients.m[senderID] = xc
 	return xc, nil
 }
 
-func (c *xmppGcmClient) waitProcessed() <-chan struct{} {
+// ping sends a ping message and blocks until pong is received.
+//
+// Returns error if timeout time passes before pong.
+func (c *xmppGcmClient) ping(timeout time.Duration) error {
+	if err := c.XmppClient.PingC2S(c.XmppClient.JID(), xmppHost); err != nil {
+		return err
+	}
+	select {
+	case <-c.pongs:
+		//if pongID == pingID {
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("xmpp pong timed out after %s", timeout.String())
+	}
+}
+
+// pingPeriodically sends periodic pings. If pong is received, the timeout
+// interval is reset, otherwise client close is triggered.
+func (c *xmppGcmClient) pingPeriodically(timeout, interval time.Duration) {
+	t := time.NewTimer(interval)
+	defer t.Stop()
+
+	for {
+		c.Lock()
+		closed := c.isClosed
+		c.Unlock()
+		if closed {
+			break
+		}
+
+		select {
+		case <-t.C:
+			if err := c.ping(timeout); err == nil {
+				t.Reset(interval)
+			} else {
+				c.gracefulClose()
+			}
+			//case <-c.done:
+			//	// Signal death externally.
+			//	x.dead <- struct{}{}
+			//	return
+		}
+	}
+}
+
+func (c *xmppGcmClient) waitAllDone() <-chan struct{} {
 	ch := make(chan struct{})
 	go func() {
 		for {
@@ -287,9 +336,11 @@ func (c *xmppGcmClient) waitProcessed() <-chan struct{} {
 }
 
 func (c *xmppGcmClient) gracefulClose() {
+	log.Println("xmppGcmClient graceful close started")
 	c.Lock()
-	defer c.Unlock()
-	if c.isClosed {
+	isClosed := c.isClosed
+	c.Unlock()
+	if isClosed {
 		return
 	}
 
@@ -300,16 +351,17 @@ func (c *xmppGcmClient) gracefulClose() {
 
 	// Wait until all is done, or timed out.
 	select {
-	case <-c.waitProcessed():
+	case <-c.waitAllDone():
 		break
-	case <-time.After(3 * time.Second):
-		//log.Error("xmpp taking a while to close, so giving up")
+	case <-time.After(5 * time.Second):
+		log.Error("xmpp taking a while to close, so giving up")
 		break
 	}
 
+	c.Lock()
 	c.XmppClient.Close()
-	// Set isClosed so we don't trigger an error when returning from listen.
 	c.isClosed = true
+	c.Unlock()
 }
 
 // xmppGcmClient implementation of listening for messages from CCS; the messages can be
@@ -335,10 +387,18 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			// This is likely fatal, so return.
 			return fmt.Errorf("error on Recv>%v", err)
 		}
-		v, ok := stanza.(xmpp.Chat)
-		if !ok {
+		switch stanza.(type) {
+		case xmpp.Chat:
+		case xmpp.IQ:
+			if stanza.(xmpp.IQ).Type == "result" {
+				c.pongs <- struct{}{}
+			}
+			continue
+		case xmpp.Presence:
 			continue
 		}
+
+		v := stanza.(xmpp.Chat)
 		switch v.Type {
 		case "":
 			cm := &CcsMessage{}
@@ -441,7 +501,6 @@ func (c *xmppGcmClient) send(m XmppMessage) (string, int, error) {
 		c.messages.Lock()
 		delete(c.messages.m, m.MessageId)
 		c.messages.Unlock()
-		c.gracefulClose()
 	}
 	return m.MessageId, bytes, err
 }
