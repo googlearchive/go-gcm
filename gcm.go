@@ -36,8 +36,8 @@ const (
 	CCSNack     = "nack"
 	CCSControl  = "control"
 	CCSReceipt  = "receipt"
-	httpAddress = "https://android.googleapis.com/gcm/send"
-	xmppHost    = "gcm.googleapis.com"
+	httpAddress = "https://gcm-http.googleapis.com/gcm/send"
+	xmppHost    = "gcm-xmpp.googleapis.com"
 	xmppPort    = "5235"
 	xmppAddress = xmppHost + ":" + xmppPort
 	// For ccs the min for exponential backoff has to be 1 sec
