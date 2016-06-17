@@ -50,7 +50,7 @@ var (
 	// Default Min and Max delay for backoff.
 	DefaultMinBackoff = 1 * time.Second
 	DefaultMaxBackoff = 10 * time.Second
-	// HTTPClientTimeout specifies a time limit for requests made by the HTTPClient
+	// HTTPClientTimeout specifies a time limit for requests made by the http client
 	HTTPClientTimeout time.Duration
 	retryableErrors   = map[string]bool{
 		"Unavailable":            true,
