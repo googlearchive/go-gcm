@@ -50,6 +50,8 @@ var (
 	// Default Min and Max delay for backoff.
 	DefaultMinBackoff = 1 * time.Second
 	DefaultMaxBackoff = 10 * time.Second
+	// HTTPClientTimeout specifies a time limit for requests made by the HTTPClient
+	HTTPClientTimeout time.Duration
 	retryableErrors   = map[string]bool{
 		"Unavailable":            true,
 		"SERVICE_UNAVAILABLE":    true,
@@ -112,7 +114,7 @@ type HttpResponse struct {
 	Failure      uint     `json:"failure,omitempty"`
 	CanonicalIds uint     `json:"canonical_ids,omitempty"`
 	Results      []Result `json:"results,omitempty"`
-	MessageId    int     `json:"message_id,omitempty"`
+	MessageId    int      `json:"message_id,omitempty"`
 	Error        string   `json:"error,omitempty"`
 }
 
@@ -463,7 +465,11 @@ func (eb exponentialBackoff) wait() {
 
 // Send a message using the HTTP GCM connection server.
 func SendHttp(apiKey string, m HttpMessage) (*HttpResponse, error) {
-	c := &httpGcmClient{httpAddress, &http.Client{}, "0"}
+	c := &httpGcmClient{
+		GcmURL:     httpAddress,
+		HttpClient: &http.Client{Timeout: HTTPClientTimeout},
+		retryAfter: "0",
+	}
 	b := newExponentialBackoff()
 	return sendHttp(apiKey, m, c, b)
 }
