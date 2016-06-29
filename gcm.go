@@ -107,12 +107,13 @@ type XmppMessage struct {
 
 // HttpResponse is the GCM connection server response to an HTTP downstream message request.
 type HttpResponse struct {
+	Status       int      `json:"-"`
 	MulticastId  int      `json:"multicast_id,omitempty"`
 	Success      uint     `json:"success,omitempty"`
 	Failure      uint     `json:"failure,omitempty"`
 	CanonicalIds uint     `json:"canonical_ids,omitempty"`
 	Results      []Result `json:"results,omitempty"`
-	MessageId    int     `json:"message_id,omitempty"`
+	MessageId    int      `json:"message_id,omitempty"`
 	Error        string   `json:"error,omitempty"`
 }
 
@@ -194,6 +195,12 @@ func (c *httpGcmClient) send(apiKey string, m HttpMessage) (*HttpResponse, error
 		return nil, fmt.Errorf("error sending request to HTTP connection server>%v", err)
 	}
 	gcmResp := &HttpResponse{}
+	gcmResp.Status = httpResp.StatusCode
+
+	if gcmResp.Status != http.StatusOK {
+		return gcmResp, fmt.Errorf("Encountered HTTP status code %d", gcmResp.Status)
+	}
+
 	body, err := ioutil.ReadAll(httpResp.Body)
 	defer httpResp.Body.Close()
 	if err != nil {
