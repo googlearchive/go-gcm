@@ -129,6 +129,7 @@ func TestHttpClientSend(t *testing.T) {
 	expectedAuthHeader := "key=apiKey"
 	expResp := &HttpResponse{}
 	err := json.Unmarshal([]byte(expectedResp), &expResp)
+	expResp.Status = http.StatusOK
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
