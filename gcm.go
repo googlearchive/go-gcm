@@ -65,6 +65,7 @@ var (
 	}{
 		m: make(map[string]*xmppGcmClient),
 	}
+	Client *http.Client
 )
 
 // Prints debug info if DebugMode is set.
@@ -463,7 +464,10 @@ func (eb exponentialBackoff) wait() {
 
 // Send a message using the HTTP GCM connection server.
 func SendHttp(apiKey string, m HttpMessage) (*HttpResponse, error) {
-	c := &httpGcmClient{httpAddress, &http.Client{}, "0"}
+	if Client == nil {
+		Client = &http.Client{}
+	}
+	c := &httpGcmClient{httpAddress, Client, "0"}
 	b := newExponentialBackoff()
 	return sendHttp(apiKey, m, c, b)
 }
