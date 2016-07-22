@@ -202,7 +202,7 @@ func (c *httpGcmClient) send(apiKey string, m HttpMessage) (*HttpResponse, error
 	}()
 
 	if status != http.StatusOK {
-		return gcmResp, fmt.Errorf("Encountered HTTP status code %d", gcmResp.Status)
+		return gcmResp, nil
 	}
 
 	body, err := ioutil.ReadAll(httpResp.Body)
