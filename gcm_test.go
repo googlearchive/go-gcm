@@ -145,6 +145,7 @@ func TestSendHttp(t *testing.T) {
 	b := &stubBackoff{}
 	expResp := &HttpResponse{}
 	err := json.Unmarshal([]byte(expectedResp), &expResp)
+	expResp.Status = 200
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -159,6 +160,7 @@ func TestBuildRespForMulticast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
+	expResp.Status = 200
 	resultsState := &multicastResultsState{
 		"4":  &Result{MessageId: "1:0408"},
 		"8":  &Result{Error: "Unavailable"},

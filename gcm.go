@@ -532,7 +532,7 @@ func sendHttp(apiKey string, m HttpMessage, c httpClient, b backoffProvider) (*H
 // Builds the final response for a multicast message, in case there have been retries for
 // subsets of the original recipients.
 func buildRespForMulticast(to []string, mrs multicastResultsState, mid int) *HttpResponse {
-	resp := &HttpResponse{}
+	resp := &HttpResponse{Status: http.StatusOK}
 	resp.MulticastId = mid
 	resp.Results = make([]Result, len(to))
 	for i, regId := range to {
