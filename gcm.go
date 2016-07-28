@@ -22,13 +22,9 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/jpillora/backoff"
-	"github.com/mattn/go-xmpp"
-	"github.com/pborman/uuid"
 )
 
 const (
@@ -37,9 +33,6 @@ const (
 	CCSControl  = "control"
 	CCSReceipt  = "receipt"
 	httpAddress = "https://gcm-http.googleapis.com/gcm/send"
-	xmppHost    = "gcm.googleapis.com"
-	xmppPort    = "5235"
-	xmppAddress = xmppHost + ":" + xmppPort
 	// For ccs the min for exponential backoff has to be 1 sec
 	ccsMinBackoff = 1 * time.Second
 )
@@ -57,13 +50,6 @@ var (
 		"INTERNAL_SERVER_ ERROR": true,
 		// TODO(silvano): should we backoff with the same strategy on
 		// DeviceMessageRateExceeded and TopicsMessageRateExceeded.
-	}
-	// Cache of xmpp clients.
-	xmppClients = struct {
-		sync.Mutex
-		m map[string]*xmppGcmClient
-	}{
-		m: make(map[string]*xmppGcmClient),
 	}
 )
 
@@ -89,22 +75,6 @@ type HttpMessage struct {
 	Notification          *Notification `json:"notification,omitempty"`
 }
 
-// A GCM Xmpp message.
-type XmppMessage struct {
-	To                       string        `json:"to,omitempty"`
-	MessageId                string        `json:"message_id"`
-	MessageType              string        `json:"message_type,omitempty"`
-	CollapseKey              string        `json:"collapse_key,omitempty"`
-	Priority                 string        `json:"priority,omitempty"`
-	ContentAvailable         bool          `json:"content_available,omitempty"`
-	DelayWhileIdle           bool          `json:"delay_while_idle,omitempty"`
-	TimeToLive               *uint         `json:"time_to_live,omitempty"`
-	DeliveryReceiptRequested bool          `json:"delivery_receipt_requested,omitempty"`
-	DryRun                   bool          `json:"dry_run,omitempty"`
-	Data                     Data          `json:"data,omitempty"`
-	Notification             *Notification `json:"notification,omitempty"`
-}
-
 // HttpResponse is the GCM connection server response to an HTTP downstream message request.
 type HttpResponse struct {
 	Status       int      `json:"-"`
@@ -122,19 +92,6 @@ type Result struct {
 	MessageId      string `json:"message_id,omitempty"`
 	RegistrationId string `json:"registration_id,omitempty"`
 	Error          string `json:"error,omitempty"`
-}
-
-// CcsMessage is an Xmpp message sent from CCS.
-type CcsMessage struct {
-	From             string `json:"from, omitempty"`
-	MessageId        string `json:"message_id, omitempty"`
-	MessageType      string `json:"message_type, omitempty"`
-	RegistrationId   string `json:"registration_id,omitempty"`
-	Error            string `json:"error,omitempty"`
-	ErrorDescription string `json:"error_description,omitempty"`
-	Category         string `json:"category, omitempty"`
-	Data             Data   `json:"data,omitempty"`
-	ControlType      string `json:"control_type,omitempty"`
 }
 
 // Used to compute results for multicast messages with retries.
@@ -158,11 +115,6 @@ type Notification struct {
 	TitleLocArgs string `json:"title_loc_args,omitempty"`
 	TitleLocKey  string `json:"title_loc_key,omitempty"`
 }
-
-// MessageHandler is the type for a function that handles a CCS message.
-// The CCS message can be an upstream message (device to server) or a
-// message from CCS (e.g. a delivery receipt).
-type MessageHandler func(cm CcsMessage) error
 
 // httpClient is an interface to stub the http client in tests.
 type httpClient interface {
@@ -223,210 +175,6 @@ func (c *httpGcmClient) send(apiKey string, m HttpMessage) (*HttpResponse, error
 // Get the value of the retry after header if present.
 func (c httpGcmClient) getRetryAfter() string {
 	return c.retryAfter
-}
-
-// xmppClient is an interface to stub the xmpp client in tests.
-type xmppClient interface {
-	listen(h MessageHandler, stop chan<- bool) error
-	send(m XmppMessage) (int, error)
-}
-
-// xmppGcmClient is a client for the Gcm Xmpp Connection Server (CCS).
-type xmppGcmClient struct {
-	sync.RWMutex
-	XmppClient xmpp.Client
-	messages   struct {
-		sync.RWMutex
-		m map[string]*messageLogEntry
-	}
-	senderID string
-	isClosed bool
-}
-
-// An entry in the messages log, used to keep track of messages pending ack and
-// retries for failed messages.
-type messageLogEntry struct {
-	body    *XmppMessage
-	backoff *exponentialBackoff
-}
-
-// Factory method for xmppGcmClient, to minimize the number of clients to one per sender id.
-// TODO(silvano): this could be revised, taking into account that we cannot have more than 1000
-// connections per senderId.
-func newXmppGcmClient(senderID string, apiKey string) (*xmppGcmClient, error) {
-	xmppClients.Lock()
-	defer xmppClients.Unlock()
-	if xc, ok := xmppClients.m[senderID]; ok {
-		return xc, nil
-	}
-
-	nc, err := xmpp.NewClient(xmppAddress, xmppUser(senderID), apiKey, DebugMode)
-	if err != nil {
-		return nil, fmt.Errorf("error connecting client>%v", err)
-	}
-
-	xc := &xmppGcmClient{
-		XmppClient: *nc,
-		messages: struct {
-			sync.RWMutex
-			m map[string]*messageLogEntry
-		}{
-			m: make(map[string]*messageLogEntry),
-		},
-		senderID: senderID,
-	}
-
-	xmppClients.m[senderID] = xc
-	return xc, nil
-}
-
-// xmppGcmClient implementation of listening for messages from CCS; the messages can be
-// acks or nacks for messages sent through XMPP, control messages, upstream messages.
-func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
-	if stop != nil {
-		go func() {
-			select {
-			case <-stop:
-				// Set isClosed to 0 so we don't trigger an error when returning.
-				c.Lock()
-				c.XmppClient.Close()
-				c.isClosed = true
-				c.Unlock()
-
-				// Remove client from cache.
-				xmppClients.Lock()
-				delete(xmppClients.m, c.senderID)
-				xmppClients.Unlock()
-			}
-		}()
-	}
-	for {
-		stanza, err := c.XmppClient.Recv()
-		if err != nil {
-			c.RLock()
-			defer c.RUnlock()
-			// If client is closed we can't return without error.
-			if c.isClosed {
-				return nil
-			}
-			// This is likely fatal, so return.
-			return fmt.Errorf("error on Recv>%v", err)
-		}
-		v, ok := stanza.(xmpp.Chat)
-		if !ok {
-			continue
-		}
-		switch v.Type {
-		case "":
-			cm := &CcsMessage{}
-			err = json.Unmarshal([]byte(v.Other[0]), cm)
-			if err != nil {
-				debug("Error unmarshaling ccs message: %v", err)
-				continue
-			}
-			switch cm.MessageType {
-			case CCSAck:
-				c.messages.Lock()
-				// ack for a sent message, delete it from log.
-				if _, ok := c.messages.m[cm.MessageId]; ok {
-					go h(*cm)
-					delete(c.messages.m, cm.MessageId)
-				}
-				c.messages.Unlock()
-			case CCSNack:
-				// nack for a sent message, retry if retryable error, bubble up otherwise.
-				if retryableErrors[cm.Error] {
-					c.retryMessage(*cm, h)
-				} else {
-					c.messages.Lock()
-					if _, ok := c.messages.m[cm.MessageId]; ok {
-						go h(*cm)
-						delete(c.messages.m, cm.MessageId)
-					}
-					c.messages.Unlock()
-				}
-			default:
-				debug("Unknown ccs message: %v", cm)
-			}
-		case "normal":
-			cm := &CcsMessage{}
-			err = json.Unmarshal([]byte(v.Other[0]), cm)
-			if err != nil {
-				debug("Error unmarshaling ccs message: %v", err)
-				continue
-			}
-			switch cm.MessageType {
-			case CCSControl:
-				// TODO(silvano): create a new connection, drop the old one 'after a while'
-				debug("control message! %v", cm)
-			case CCSReceipt:
-				debug("receipt! %v", cm)
-				// Receipt message: send ack and pass to listener.
-				origMessageID := strings.TrimPrefix(cm.MessageId, "dr2:")
-				ack := XmppMessage{To: cm.From, MessageId: origMessageID, MessageType: CCSAck}
-				c.send(ack)
-				go h(*cm)
-			default:
-				debug("uknown upstream message! %v", cm)
-				// Upstream message: send ack and pass to listener.
-				ack := XmppMessage{To: cm.From, MessageId: cm.MessageId, MessageType: CCSAck}
-				c.send(ack)
-				go h(*cm)
-			}
-		case "error":
-			debug("error response %v", v)
-		default:
-			debug("unknown message type %v", v)
-		}
-	}
-}
-
-//TODO(silvano): add flow control (max 100 pending messages at one time)
-// xmppGcmClient implementation to send a message through Gcm Xmpp server (ccs).
-func (c *xmppGcmClient) send(m XmppMessage) (string, int, error) {
-	if m.MessageId == "" {
-		m.MessageId = uuid.New()
-	}
-	c.messages.Lock()
-	if _, ok := c.messages.m[m.MessageId]; !ok {
-		b := newExponentialBackoff()
-		if b.b.Min < ccsMinBackoff {
-			b.setMin(ccsMinBackoff)
-		}
-		c.messages.m[m.MessageId] = &messageLogEntry{body: &m, backoff: b}
-	}
-	c.messages.Unlock()
-
-	stanza := `<message id=""><gcm xmlns="google:mobile:data">%v</gcm></message>`
-	body, err := json.Marshal(m)
-	if err != nil {
-		return m.MessageId, 0, fmt.Errorf("could not unmarshal body of xmpp message>%v", err)
-	}
-	bs := string(body)
-
-	debug("Sending XMPP: ", fmt.Sprintf(stanza, bs))
-	// Serialize wire access for thread safety.
-	c.Lock()
-	defer c.Unlock()
-	bytes, err := c.XmppClient.SendOrg(fmt.Sprintf(stanza, bs))
-	return m.MessageId, bytes, err
-}
-
-// Retry sending a message with exponential backoff; if over limit, bubble up the failed message.
-func (c *xmppGcmClient) retryMessage(cm CcsMessage, h MessageHandler) {
-	c.messages.RLock()
-	defer c.messages.RUnlock()
-	if me, ok := c.messages.m[cm.MessageId]; ok {
-		if me.backoff.sendAnother() {
-			go func(m *messageLogEntry) {
-				m.backoff.wait()
-				c.send(*m.body)
-			}(me)
-		} else {
-			debug("Exponential backoff failed over limit for message: ", me)
-			go h(cm)
-		}
-	}
 }
 
 // Interface to stub the http client in tests.
@@ -585,33 +333,7 @@ func checkResults(gcmResults []Result, recipients []string, resultsState multica
 	return doRetry, toRetry, nil
 }
 
-// SendXmpp sends a message using the XMPP GCM connection server.
-func SendXmpp(senderId, apiKey string, m XmppMessage) (string, int, error) {
-	c, err := newXmppGcmClient(senderId, apiKey)
-	if err != nil {
-		return "", 0, fmt.Errorf("error creating xmpp client>%v", err)
-	}
-	return c.send(m)
-}
-
-// Listen blocks and connects to GCM waiting for messages, calling the handler
-// for CCS message that can be of interest to the listener: upstream messages, delivery receipt
-// notifications, errors. An optional stop channel can be provided to
-// stop listening.
-func Listen(senderId, apiKey string, h MessageHandler, stop <-chan bool) error {
-	cl, err := newXmppGcmClient(senderId, apiKey)
-	if err != nil {
-		return fmt.Errorf("error creating xmpp client>%v", err)
-	}
-	return cl.listen(h, stop)
-}
-
 // authHeader generates an authorization header value for an api key.
 func authHeader(apiKey string) string {
 	return fmt.Sprintf("key=%v", apiKey)
-}
-
-// xmppUser generates an xmpp username from a sender ID.
-func xmppUser(senderId string) string {
-	return senderId + "@" + xmppHost
 }
