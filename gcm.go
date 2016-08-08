@@ -13,7 +13,7 @@
 // limitations under the License.
 
 // Package gcm provides send and receive GCM functionality.
-package gcm
+package googlemessaging
 
 import (
 	"bytes"
