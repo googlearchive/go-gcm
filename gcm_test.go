@@ -207,7 +207,3 @@ func TestCheckResults(t *testing.T) {
 	}
 	assertDeepEqual(t, resultsState, expectedResultState)
 }
-
-func TestXmppUser(t *testing.T) {
-	assertEqual(t, xmppUser("b"), "b@gcm.googleapis.com")
-}

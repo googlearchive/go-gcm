@@ -28,13 +28,19 @@ import (
 )
 
 const (
-	CCSAck      = "ack"
-	CCSNack     = "nack"
-	CCSControl  = "control"
-	CCSReceipt  = "receipt"
-	httpAddress = "https://gcm-http.googleapis.com/gcm/send"
+	CCSAck     = "ack"
+	CCSNack    = "nack"
+	CCSControl = "control"
+	CCSReceipt = "receipt"
 	// For ccs the min for exponential backoff has to be 1 sec
 	ccsMinBackoff = 1 * time.Second
+)
+
+type Platform string
+
+const (
+	GCM Platform = "https://gcm-http.googleapis.com/gcm/send"
+	FCM Platform = "https://fcm.googleapis.com/fcm/send"
 )
 
 var (
@@ -221,8 +227,8 @@ func (eb exponentialBackoff) wait() {
 }
 
 // Send a message using the HTTP GCM connection server.
-func SendHttp(apiKey string, m HttpMessage) (*HttpResponse, error) {
-	c := &httpGcmClient{httpAddress, &http.Client{}, "0"}
+func SendHttp(platform Platform, apiKey string, m HttpMessage) (*HttpResponse, error) {
+	c := &httpGcmClient{string(platform), &http.Client{}, "0"}
 	b := newExponentialBackoff()
 	return sendHttp(apiKey, m, c, b)
 }
