@@ -244,20 +244,17 @@ type messageLogEntry struct {
 // Factory method for xmppGcmClient, to minimize the number of clients to one per sender id.
 // TODO(silvano): this could be revised, taking into account that we cannot have more than 1000
 // connections per senderId.
-func newXmppGcmClient(senderID, apiKey, environment string) (*xmppGcmClient, error) {
+func newXmppGcmClient(senderID, apiKey string, isProduction bool) (*xmppGcmClient, error) {
 	xmppClients.Lock()
 	defer xmppClients.Unlock()
 	if xc, ok := xmppClients.m[senderID]; ok {
 		return xc, nil
 	}
 
-	switch environment {
-	case "production":
+	if isProduction {
 		xmppAddress = xmppHost + ":" + xmppPort
-	case "staging":
+	} else {
 		xmppAddress = xmppStagingHost + ":" + xmppStagingPort
-	default:
-		log.Panicf("invalid environment: %s", environment)
 	}
 
 	nc, err := xmpp.NewClient(xmppAddress, xmppUser(senderID), apiKey, DebugMode)
@@ -586,8 +583,8 @@ func checkResults(gcmResults []Result, recipients []string, resultsState multica
 }
 
 // SendXmpp sends a message using the XMPP GCM connection server.
-func SendXmpp(senderId, apiKey, environment string, m XmppMessage) (string, int, error) {
-	c, err := newXmppGcmClient(senderId, apiKey, environment)
+func SendXmpp(senderId, apiKey string, isProduction bool, m XmppMessage) (string, int, error) {
+	c, err := newXmppGcmClient(senderId, apiKey, isProduction)
 	if err != nil {
 		return "", 0, fmt.Errorf("error creating xmpp client>%v", err)
 	}
@@ -598,8 +595,8 @@ func SendXmpp(senderId, apiKey, environment string, m XmppMessage) (string, int,
 // for CCS message that can be of interest to the listener: upstream messages, delivery receipt
 // notifications, errors. An optional stop channel can be provided to
 // stop listening.
-func Listen(senderId, apiKey, environment string, h MessageHandler, stop <-chan bool) error {
-	cl, err := newXmppGcmClient(senderId, apiKey, environment)
+func Listen(senderId, apiKey string, isProduction bool, h MessageHandler, stop <-chan bool) error {
+	cl, err := newXmppGcmClient(senderId, apiKey, isProduction)
 	if err != nil {
 		return fmt.Errorf("error creating xmpp client>%v", err)
 	}
