@@ -583,8 +583,8 @@ func checkResults(gcmResults []Result, recipients []string, resultsState multica
 }
 
 // SendXmpp sends a message using the XMPP GCM connection server.
-func SendXmpp(senderId, apiKey string, isProduction bool, m XmppMessage) (string, int, error) {
-	c, err := newXmppGcmClient(senderId, apiKey, isProduction)
+func SendXmpp(senderId, apiKey string, m XmppMessage) (string, int, error) {
+	c, err := newXmppGcmClient(senderId, apiKey, true)
 	if err != nil {
 		return "", 0, fmt.Errorf("error creating xmpp client>%v", err)
 	}
@@ -595,8 +595,29 @@ func SendXmpp(senderId, apiKey string, isProduction bool, m XmppMessage) (string
 // for CCS message that can be of interest to the listener: upstream messages, delivery receipt
 // notifications, errors. An optional stop channel can be provided to
 // stop listening.
-func Listen(senderId, apiKey string, isProduction bool, h MessageHandler, stop <-chan bool) error {
-	cl, err := newXmppGcmClient(senderId, apiKey, isProduction)
+func Listen(senderId, apiKey string, h MessageHandler, stop <-chan bool) error {
+	cl, err := newXmppGcmClient(senderId, apiKey, true)
+	if err != nil {
+		return fmt.Errorf("error creating xmpp client>%v", err)
+	}
+	return cl.listen(h, stop)
+}
+
+// SendXmppStaging sends a message using the XMPP GCM staging connection server.
+func SendXmppStaging(senderId, apiKey string, m XmppMessage) (string, int, error) {
+	c, err := newXmppGcmClient(senderId, apiKey, false)
+	if err != nil {
+		return "", 0, fmt.Errorf("error creating xmpp client>%v", err)
+	}
+	return c.send(m)
+}
+
+// ListenStaging blocks and connects to GCM staging waiting for messages, calling the handler
+// for CCS message that can be of interest to the listener: upstream messages, delivery receipt
+// notifications, errors. An optional stop channel can be provided to
+// stop listening.
+func ListenStaging(senderId, apiKey string, h MessageHandler, stop <-chan bool) error {
+	cl, err := newXmppGcmClient(senderId, apiKey, false)
 	if err != nil {
 		return fmt.Errorf("error creating xmpp client>%v", err)
 	}
