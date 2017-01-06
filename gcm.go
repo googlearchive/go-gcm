@@ -32,14 +32,15 @@ import (
 )
 
 const (
-	CCSAck      = "ack"
-	CCSNack     = "nack"
-	CCSControl  = "control"
-	CCSReceipt  = "receipt"
-	httpAddress = "https://gcm-http.googleapis.com/gcm/send"
-	xmppHost    = "gcm.googleapis.com"
-	xmppPort    = "5235"
-	xmppAddress = xmppHost + ":" + xmppPort
+	CCSAck          = "ack"
+	CCSNack         = "nack"
+	CCSControl      = "control"
+	CCSReceipt      = "receipt"
+	httpAddress     = "https://gcm-http.googleapis.com/gcm/send"
+	xmppHost        = "gcm.googleapis.com"
+	xmppPort        = "5235"
+	xmppStagingHost = "gcm-staging.googleapis.com"
+	xmppStagingPort = "5236"
 	// For ccs the min for exponential backoff has to be 1 sec
 	ccsMinBackoff = 1 * time.Second
 )
@@ -65,6 +66,7 @@ var (
 	}{
 		m: make(map[string]*xmppGcmClient),
 	}
+	xmppAddress = xmppHost + ":" + xmppPort
 )
 
 // Prints debug info if DebugMode is set.
@@ -112,7 +114,7 @@ type HttpResponse struct {
 	Failure      uint     `json:"failure,omitempty"`
 	CanonicalIds uint     `json:"canonical_ids,omitempty"`
 	Results      []Result `json:"results,omitempty"`
-	MessageId    int     `json:"message_id,omitempty"`
+	MessageId    int      `json:"message_id,omitempty"`
 	Error        string   `json:"error,omitempty"`
 }
 
@@ -242,11 +244,20 @@ type messageLogEntry struct {
 // Factory method for xmppGcmClient, to minimize the number of clients to one per sender id.
 // TODO(silvano): this could be revised, taking into account that we cannot have more than 1000
 // connections per senderId.
-func newXmppGcmClient(senderID string, apiKey string) (*xmppGcmClient, error) {
+func newXmppGcmClient(senderID, apiKey, environment string) (*xmppGcmClient, error) {
 	xmppClients.Lock()
 	defer xmppClients.Unlock()
 	if xc, ok := xmppClients.m[senderID]; ok {
 		return xc, nil
+	}
+
+	switch environment {
+	case "production":
+		xmppAddress = xmppHost + ":" + xmppPort
+	case "staging":
+		xmppAddress = xmppStagingHost + ":" + xmppStagingPort
+	default:
+		log.Panicf("invalid environment: %s", environment)
 	}
 
 	nc, err := xmpp.NewClient(xmppAddress, xmppUser(senderID), apiKey, DebugMode)
@@ -575,8 +586,8 @@ func checkResults(gcmResults []Result, recipients []string, resultsState multica
 }
 
 // SendXmpp sends a message using the XMPP GCM connection server.
-func SendXmpp(senderId, apiKey string, m XmppMessage) (string, int, error) {
-	c, err := newXmppGcmClient(senderId, apiKey)
+func SendXmpp(senderId, apiKey, environment string, m XmppMessage) (string, int, error) {
+	c, err := newXmppGcmClient(senderId, apiKey, environment)
 	if err != nil {
 		return "", 0, fmt.Errorf("error creating xmpp client>%v", err)
 	}
@@ -587,8 +598,8 @@ func SendXmpp(senderId, apiKey string, m XmppMessage) (string, int, error) {
 // for CCS message that can be of interest to the listener: upstream messages, delivery receipt
 // notifications, errors. An optional stop channel can be provided to
 // stop listening.
-func Listen(senderId, apiKey string, h MessageHandler, stop <-chan bool) error {
-	cl, err := newXmppGcmClient(senderId, apiKey)
+func Listen(senderId, apiKey, environment string, h MessageHandler, stop <-chan bool) error {
+	cl, err := newXmppGcmClient(senderId, apiKey, environment)
 	if err != nil {
 		return fmt.Errorf("error creating xmpp client>%v", err)
 	}
