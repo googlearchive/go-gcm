@@ -1,3 +1,10 @@
+# Project status #
+![status: inactive](https://img.shields.io/badge/status-inactive-red.svg)
+
+This project is no longer actively maintained, and remains here as an archive of this work.
+
+For a replacement, check out [this actively maintained fork](https://github.com/kikinteractive/go-gcm) of the library.
+
 GCM Library for Go
 --
 
