@@ -51,10 +51,10 @@ var (
 	DefaultMinBackoff = 1 * time.Second
 	DefaultMaxBackoff = 10 * time.Second
 	retryableErrors   = map[string]bool{
-		"Unavailable":            true,
-		"SERVICE_UNAVAILABLE":    true,
-		"InternalServerError":    true,
-		"INTERNAL_SERVER_ ERROR": true,
+		"Unavailable":           true,
+		"SERVICE_UNAVAILABLE":   true,
+		"InternalServerError":   true,
+		"INTERNAL_SERVER_ERROR": true,
 		// TODO(silvano): should we backoff with the same strategy on
 		// DeviceMessageRateExceeded and TopicsMessageRateExceeded.
 	}
@@ -228,6 +228,7 @@ type xmppGcmClient struct {
 		sync.RWMutex
 		m map[string]*messageLogEntry
 	}
+	pongs    chan struct{}
 	senderID string
 	isClosed bool
 }
@@ -263,10 +264,104 @@ func newXmppGcmClient(senderID string, apiKey string) (*xmppGcmClient, error) {
 			m: make(map[string]*messageLogEntry),
 		},
 		senderID: senderID,
+		pongs:    make(chan struct{}),
 	}
+
+	go xc.pingPeriodically(5*time.Second, 10*time.Second)
 
 	xmppClients.m[senderID] = xc
 	return xc, nil
+}
+
+// ping sends a ping message and blocks until pong is received.
+//
+// Returns error if timeout time passes before pong.
+func (c *xmppGcmClient) ping(timeout time.Duration) error {
+	if err := c.XmppClient.PingC2S(c.XmppClient.JID(), xmppHost); err != nil {
+		return err
+	}
+	select {
+	case <-c.pongs:
+		//if pongID == pingID {
+		return nil
+	case <-time.After(timeout):
+		return fmt.Errorf("xmpp pong timed out after %s", timeout.String())
+	}
+}
+
+// pingPeriodically sends periodic pings. If pong is received, the timeout
+// interval is reset, otherwise client close is triggered.
+func (c *xmppGcmClient) pingPeriodically(timeout, interval time.Duration) {
+	t := time.NewTimer(interval)
+	defer t.Stop()
+
+	for {
+		c.Lock()
+		closed := c.isClosed
+		c.Unlock()
+		if closed {
+			break
+		}
+
+		select {
+		case <-t.C:
+			if err := c.ping(timeout); err == nil {
+				t.Reset(interval)
+			} else {
+				c.gracefulClose()
+			}
+			//case <-c.done:
+			//	// Signal death externally.
+			//	x.dead <- struct{}{}
+			//	return
+		}
+	}
+}
+
+func (c *xmppGcmClient) waitAllDone() <-chan struct{} {
+	ch := make(chan struct{})
+	go func() {
+		for {
+			c.messages.RLock()
+			nm := len(c.messages.m)
+			c.messages.RUnlock()
+			if nm == 0 {
+				close(ch)
+				break
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}()
+	return ch
+}
+
+func (c *xmppGcmClient) gracefulClose() {
+	log.Println("xmppGcmClient graceful close started")
+	c.Lock()
+	isClosed := c.isClosed
+	c.Unlock()
+	if isClosed {
+		return
+	}
+
+	// Remove myself from clients cache.
+	xmppClients.Lock()
+	delete(xmppClients.m, c.senderID)
+	xmppClients.Unlock()
+
+	// Wait until all is done, or timed out.
+	select {
+	case <-c.waitAllDone():
+		break
+	case <-time.After(5 * time.Second):
+		log.Error("xmpp taking a while to close, so giving up")
+		break
+	}
+
+	c.Lock()
+	c.XmppClient.Close()
+	c.isClosed = true
+	c.Unlock()
 }
 
 // xmppGcmClient implementation of listening for messages from CCS; the messages can be
@@ -276,16 +371,7 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 		go func() {
 			select {
 			case <-stop:
-				// Set isClosed to 0 so we don't trigger an error when returning.
-				c.Lock()
-				c.XmppClient.Close()
-				c.isClosed = true
-				c.Unlock()
-
-				// Remove client from cache.
-				xmppClients.Lock()
-				delete(xmppClients.m, c.senderID)
-				xmppClients.Unlock()
+				c.gracefulClose()
 			}
 		}()
 	}
@@ -294,17 +380,25 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 		if err != nil {
 			c.RLock()
 			defer c.RUnlock()
-			// If client is closed we can't return without error.
 			if c.isClosed {
-				return nil
+				// Client is closed, return without error.
+				break
 			}
 			// This is likely fatal, so return.
 			return fmt.Errorf("error on Recv>%v", err)
 		}
-		v, ok := stanza.(xmpp.Chat)
-		if !ok {
+		switch stanza.(type) {
+		case xmpp.Chat:
+		case xmpp.IQ:
+			if stanza.(xmpp.IQ).Type == "result" {
+				c.pongs <- struct{}{}
+			}
+			continue
+		case xmpp.Presence:
 			continue
 		}
+
+		v := stanza.(xmpp.Chat)
 		switch v.Type {
 		case "":
 			cm := &CcsMessage{}
@@ -348,6 +442,9 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			case CCSControl:
 				// TODO(silvano): create a new connection, drop the old one 'after a while'
 				debug("control message! %v", cm)
+				if cm.Error == "CONNECTION_DRAINING" {
+					c.gracefulClose()
+				}
 			case CCSReceipt:
 				debug("receipt! %v", cm)
 				// Receipt message: send ack and pass to listener.
@@ -368,6 +465,7 @@ func (c *xmppGcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			debug("unknown message type %v", v)
 		}
 	}
+	return nil
 }
 
 //TODO(silvano): add flow control (max 100 pending messages at one time)
@@ -394,14 +492,20 @@ func (c *xmppGcmClient) send(m XmppMessage) (string, int, error) {
 	bs := string(body)
 
 	debug("Sending XMPP: ", fmt.Sprintf(stanza, bs))
+
 	// Serialize wire access for thread safety.
 	c.Lock()
-	defer c.Unlock()
 	bytes, err := c.XmppClient.SendOrg(fmt.Sprintf(stanza, bs))
+	c.Unlock()
+	if err != nil {
+		c.messages.Lock()
+		delete(c.messages.m, m.MessageId)
+		c.messages.Unlock()
+	}
 	return m.MessageId, bytes, err
 }
 
-// Retry sending a message with exponential backoff; if over limit, bubble up the failed message.
+// Retry sending an xmpp message with exponential backoff; if over limit, bubble up the failed message.
 func (c *xmppGcmClient) retryMessage(cm CcsMessage, h MessageHandler) {
 	c.messages.RLock()
 	defer c.messages.RUnlock()
@@ -593,6 +697,16 @@ func Listen(senderId, apiKey string, h MessageHandler, stop <-chan bool) error {
 		return fmt.Errorf("error creating xmpp client>%v", err)
 	}
 	return cl.listen(h, stop)
+}
+
+// Close will stop and close the corresponding client.
+func Close(senderId string) error {
+	c, err := newXmppGcmClient(senderId, "")
+	if err != nil {
+		return fmt.Errorf("error creating xmpp client>%v", err)
+	}
+	c.gracefulClose()
+	return nil
 }
 
 // authHeader generates an authorization header value for an api key.
