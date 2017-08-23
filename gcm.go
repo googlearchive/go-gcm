@@ -116,6 +116,7 @@ type Notification struct {
 	Tag          string `json:"tag,omitempty"`
 	Color        string `json:"color,omitempty"`
 	ClickAction  string `json:"click_action,omitempty"`
+	AndroidChID  string `json:"android_channel_id"`
 	BodyLocKey   string `json:"body_loc_key,omitempty"`
 	BodyLocArgs  string `json:"body_loc_args,omitempty"`
 	TitleLocArgs string `json:"title_loc_args,omitempty"`
