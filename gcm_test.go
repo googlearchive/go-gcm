@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package gcm
+package googlemessaging
 
 import (
 	"encoding/json"
@@ -129,6 +129,7 @@ func TestHttpClientSend(t *testing.T) {
 	expectedAuthHeader := "key=apiKey"
 	expResp := &HttpResponse{}
 	err := json.Unmarshal([]byte(expectedResp), &expResp)
+	expResp.Status = http.StatusOK
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -144,6 +145,7 @@ func TestSendHttp(t *testing.T) {
 	b := &stubBackoff{}
 	expResp := &HttpResponse{}
 	err := json.Unmarshal([]byte(expectedResp), &expResp)
+	expResp.Status = 200
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -158,6 +160,7 @@ func TestBuildRespForMulticast(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
+	expResp.Status = 200
 	resultsState := &multicastResultsState{
 		"4":  &Result{MessageId: "1:0408"},
 		"8":  &Result{Error: "Unavailable"},
@@ -203,8 +206,4 @@ func TestCheckResults(t *testing.T) {
 		"42": &Result{Error: "NotRegistered"},
 	}
 	assertDeepEqual(t, resultsState, expectedResultState)
-}
-
-func TestXmppUser(t *testing.T) {
-	assertEqual(t, xmppUser("b"), "b@gcm.googleapis.com")
 }
