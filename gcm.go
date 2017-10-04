@@ -18,10 +18,14 @@ package gcm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"mime"
 	"net/http"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -70,7 +74,15 @@ var (
 // Prints debug info if DebugMode is set.
 func debug(m string, v interface{}) {
 	if DebugMode {
-		log.Printf(m+":%+v", v)
+		_, file, line, ok := runtime.Caller(1)
+		if !ok {
+			file = "???"
+			line = 0
+		} else {
+			file = filepath.Base(file)
+		}
+
+		log.Printf("(%s:%d) %s:%+v", file, line, m, v)
 	}
 }
 
@@ -112,7 +124,7 @@ type HttpResponse struct {
 	Failure      uint     `json:"failure,omitempty"`
 	CanonicalIds uint     `json:"canonical_ids,omitempty"`
 	Results      []Result `json:"results,omitempty"`
-	MessageId    int     `json:"message_id,omitempty"`
+	MessageId    int      `json:"message_id,omitempty"`
 	Error        string   `json:"error,omitempty"`
 }
 
@@ -202,6 +214,11 @@ func (c *httpGcmClient) send(apiKey string, m HttpMessage) (*HttpResponse, error
 	debug("received body", string(body))
 	err = json.Unmarshal(body, &gcmResp)
 	if err != nil {
+		contentType := httpResp.Header.Get("Content-Type")
+		mediatype, _, _ := mime.ParseMediaType(contentType)
+		if mediatype != "application/json" {
+			return gcmResp, errors.New(string(body))
+		}
 		return gcmResp, fmt.Errorf("error unmarshaling json from body: %v", err)
 	}
 	// TODO(silvano): this is assuming that the header contains seconds instead of a date, need to check
