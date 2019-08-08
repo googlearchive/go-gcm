@@ -36,7 +36,7 @@ const (
 	CCSNack     = "nack"
 	CCSControl  = "control"
 	CCSReceipt  = "receipt"
-	httpAddress = "https://gcm-http.googleapis.com/gcm/send"
+	httpAddress = "https://fcm.googleapis.com/fcm/send"
 	xmppHost    = "gcm.googleapis.com"
 	xmppPort    = "5235"
 	xmppAddress = xmppHost + ":" + xmppPort
